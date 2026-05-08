@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import { ethers } from "ethers"; // 🔥 IMPORT ETHERS
 import { 
   ArrowLeft, CheckCircle2, XCircle, Clock, 
   Wallet, User, CalendarDays, Ban, AlertTriangle, 
@@ -20,7 +21,7 @@ export default function CampaignDetailPage() {
   const [campaign, setCampaign] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // STATE RIWAYAT, BALANCE (ASLI), DAN TOTAL TERKUMPUL (AKUMULASI)
+  // STATE RIWAYAT, BALANCE (ASLI DARI BLOCKCHAIN), DAN TOTAL TERKUMPUL (AKUMULASI API)
   const [walletHistory, setWalletHistory] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [liveBalance, setLiveBalance] = useState<number | null>(null);
@@ -43,6 +44,7 @@ export default function CampaignDetailPage() {
   const [isUpdatingWallet, setIsUpdatingWallet] = useState(false);
 
   const IMAGE_BASE_URL = process.env.NEXT_PUBLIC_IMAGE_BASE_URL;
+  const CONTRACT_ADDRESS = process.env.NEXT_PUBLIC_CONTRACT_ADDRESS || ""; 
 
   const fetchCampaignDetail = useCallback(async () => {
     setIsLoading(true);
@@ -50,7 +52,6 @@ export default function CampaignDetailPage() {
       const res = await apiFetch(`/admin/campaigns/${slug}`, { method: "GET" });
       const data = res?.data || res;
       setCampaign(data);
-      // Sinkronkan state input wallet dengan data dari database
       setNewWalletAddress(data.wallet_address || "");
     } catch (error) {
       toast.error("Gagal menarik data detail kampanye.");
@@ -63,54 +64,94 @@ export default function CampaignDetailPage() {
     if (slug) fetchCampaignDetail();
   }, [slug, fetchCampaignDetail]);
 
-  const fetchCampaignHistory = useCallback(async () => {
+  const fetchCampaignHistoryAndBalance = useCallback(async () => {
     const receiverWallet = campaign?.wallet_address;
     if (!receiverWallet) return;
     
     setIsLoadingHistory(true);
+    
     try {
-      // 🔥 UBAH: Tambahkan fetch untuk endpoint /donations/amount/:wallet
-      const [historyRes, balanceRes, amountRes] = await Promise.all([
-        apiFetch(`/donations/wallets/history/${receiverWallet}`, { method: "GET" }).catch(() => null),
-        apiFetch(`/donations/wallet/balance/${receiverWallet}`, { method: "GET" }).catch(() => null),
-        apiFetch(`/donations/amount/${receiverWallet}`, { method: "GET" }).catch(() => null)
-      ]);
+      // ==========================================
+      // 1. TARIK DATA DARI BACKEND (Riwayat & Akumulasi)
+      // ==========================================
+      const resIn = await apiFetch(`/donations/in/${receiverWallet}`, { method: "GET" }).catch(() => null);
       
-      if (historyRes && historyRes.data) {
-        const incomingDonations = historyRes.data
-          .filter((tx: any) => tx.type?.toLowerCase() === "in")
-          .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      if (resIn && resIn.data) {
+        // Ekstrak dan urutkan Riwayat
+        if (Array.isArray(resIn.data.history)) {
+          const incomingDonations = resIn.data.history.map((tx: any) => ({
+            tx_hash: tx.tx_hash,
+            date: tx.created_at,
+            type: "In",
+            amount: tx.amount.toString(),
+            from_to: tx.donatur_address || "Anonim",
+          })).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          
+          setWalletHistory(incomingDonations);
+          setCurrentPage(1); 
+        }
 
-        setWalletHistory(incomingDonations);
-        setCurrentPage(1); 
+        // Ekstrak Total Akumulasi (dari atribut total_balance di endpoint /in/)
+        if (resIn.data.total_balance !== undefined) {
+          setTotalCollectedAmount(parseFloat(resIn.data.total_balance));
+        } else {
+          setTotalCollectedAmount(0);
+        }
       } else {
         setWalletHistory([]);
-      }
-
-      if (balanceRes && balanceRes.data !== undefined) {
-        const balanceData = typeof balanceRes.data === 'object' ? balanceRes.data.balance : balanceRes.data;
-        setLiveBalance(parseFloat(balanceData || "0"));
-      } else {
-        setLiveBalance(0);
-      }
-
-      // 🔥 AMBIL DATA AKUMULASI DARI total_amount
-      if (amountRes && amountRes.data && amountRes.data.total_amount !== undefined) {
-        setTotalCollectedAmount(parseFloat(amountRes.data.total_amount));
-      } else {
         setTotalCollectedAmount(0);
       }
 
+      // ==========================================
+      // 2. TARIK DATA DARI BLOCKCHAIN (Saldo Real / Ethers.js)
+      // ==========================================
+      if (CONTRACT_ADDRESS) {
+        const rpcUrls = [
+          process.env.NEXT_PUBLIC_RPC_URL,
+          "https://polygon-bor-rpc.publicnode.com",
+          "https://polygon.rpc.thirdweb.com",
+          "https://rpc-mainnet.maticvigil.com"
+        ].filter(Boolean) as string[];
+
+        const minABI = [
+          "function balanceOf(address owner) view returns (uint256)",
+          "function decimals() view returns (uint8)"
+        ];
+
+        let rawBalance;
+        let decimals;
+
+        for (const url of rpcUrls) {
+          try {
+            const provider = new ethers.JsonRpcProvider(url);
+            const contract = new ethers.Contract(CONTRACT_ADDRESS, minABI, provider);
+            
+            rawBalance = await contract.balanceOf(receiverWallet);
+            decimals = await contract.decimals();
+            break; // Berhasil, keluar dari loop
+          } catch (err) {
+            console.warn(`Gagal terhubung ke RPC ${url}, mencoba fallback...`);
+          }
+        }
+
+        if (rawBalance !== undefined && decimals !== undefined) {
+          const formattedBalance = ethers.formatUnits(rawBalance, decimals);
+          setLiveBalance(parseFloat(parseFloat(formattedBalance).toFixed(2)));
+        } else {
+          setLiveBalance(0); // Fallback jika semua RPC mati
+        }
+      }
+
     } catch (err) {
-      console.error("Gagal menarik data wallet:", err);
+      console.error("Gagal menarik data wallet dan saldo:", err);
     } finally {
       setIsLoadingHistory(false);
     }
   }, [campaign?.wallet_address]);
 
   useEffect(() => {
-    if (campaign?.wallet_address) fetchCampaignHistory();
-  }, [campaign?.wallet_address, fetchCampaignHistory]);
+    if (campaign?.wallet_address) fetchCampaignHistoryAndBalance();
+  }, [campaign?.wallet_address, fetchCampaignHistoryAndBalance]);
 
   const handleCopyWallet = () => {
     if (campaign?.wallet_address) {
@@ -137,7 +178,6 @@ export default function CampaignDetailPage() {
     return text;
   };
 
-  // 🔥 IDENTIFIKASI TIPE PENGGALANG (INDIVIDU / LEMBAGA)
   const campaignTypeStr = String(
     campaign?.beneficiary?.beneficiary_type || 
     campaign?.beneficiary?.type || 
@@ -149,9 +189,8 @@ export default function CampaignDetailPage() {
   ).toLowerCase().trim();
 
   const isCampaignIndividual = campaignTypeStr.includes("individu") || campaignTypeStr.includes("personal");
-  const isOrganization = !isCampaignIndividual && campaignTypeStr !== ""; // Jika kosong, anggap aman dulu
+  const isOrganization = !isCampaignIndividual && campaignTypeStr !== ""; 
 
-  // 🔥 FUNGSI UPDATE WALLET OLEH ADMIN
   const submitUpdateWallet = async () => {
     if (!newWalletAddress.trim()) return toast.error("Wallet tidak boleh kosong!");
     setIsUpdatingWallet(true);
@@ -169,7 +208,7 @@ export default function CampaignDetailPage() {
 
     try {
       await updatePromise;
-      fetchCampaignDetail(); // Tarik data baru setelah update
+      fetchCampaignDetail(); 
     } catch (error) {
       console.error(error);
     } finally {
@@ -178,7 +217,6 @@ export default function CampaignDetailPage() {
   };
 
   const submitApprove = async () => {
-    // 🔥 VALIDASI: Jangan izinkan approve jika lembaga tapi wallet belum diisi admin
     if (isOrganization && !campaign?.wallet_address) {
       toast.error("Harap masukkan dan simpan Wallet Lembaga terlebih dahulu sebelum menayangkan kampanye!", { duration: 4000 });
       setIsApproveModalOpen(false);
@@ -242,7 +280,6 @@ export default function CampaignDetailPage() {
   const rawTarget = campaign?.target_amount || 1;
   const target = typeof rawTarget === 'string' ? parseFloat(rawTarget.replace(/[^\d.-]/g, '')) : rawTarget;
   
-  // 🔥 UBAH: Gunakan totalCollectedAmount yang berasal dari /donations/amount
   const rawCollected = totalCollectedAmount !== null ? totalCollectedAmount : (campaign?.current_amount || 0);
   const collected = typeof rawCollected === 'string' ? parseFloat(rawCollected.replace(/[^\d.-]/g, '')) : rawCollected;
 
@@ -263,7 +300,6 @@ export default function CampaignDetailPage() {
 
   const imageUrl = campaign.image_banner?.startsWith("http") ? campaign.image_banner : `${IMAGE_BASE_URL}/${campaign.image_banner?.replace(/^\/+/, "")}`;
 
-  // LOGIKA PAGINATION RIWAYAT DONASI
   const totalPages = Math.ceil(walletHistory.length / itemsPerPage) || 1;
   const paginatedHistory = walletHistory.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
@@ -349,7 +385,7 @@ export default function CampaignDetailPage() {
           {/* RIWAYAT DONASI MASUK DENGAN PAGINATION */}
           <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-gray-100">
             <h3 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
-              <History size={20} className="text-purple-600"/> Riwayat Aliran Dana (Blockchain)
+              <History size={20} className="text-purple-600"/> Riwayat Aliran Dana
             </h3>
             
             <div className="flex flex-col gap-3">
@@ -357,7 +393,7 @@ export default function CampaignDetailPage() {
                 <div className="flex items-center justify-center py-6 text-purple-400"><RefreshCw size={24} className="animate-spin" /></div>
               ) : walletHistory.length === 0 ? (
                 <div className="p-8 text-center bg-gray-50 border border-gray-100 rounded-2xl">
-                  <p className="text-sm font-bold text-gray-500">Belum ada donasi tercatat di Blockchain.</p>
+                  <p className="text-sm font-bold text-gray-500">Belum ada donasi tercatat.</p>
                 </div>
               ) : (
                 <>
@@ -451,12 +487,12 @@ export default function CampaignDetailPage() {
             </div>
           )}
 
-          {/* KARTU BALANCE ASLI (TETAP MENAMPILKAN SISA SALDO) */}
+          {/* KARTU BALANCE ASLI (REAL TIME DARI BLOCKCHAIN) */}
           <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-6 rounded-[2rem] shadow-md text-white relative overflow-hidden">
             <div className="absolute -top-10 -right-10 w-32 h-32 bg-white opacity-10 rounded-full blur-2xl"></div>
             <div className="flex items-center justify-between mb-4 relative z-10">
               <h3 className="text-xs font-bold text-indigo-100 uppercase tracking-widest flex items-center gap-2"><Coins size={16}/> Saldo Real (Blockchain)</h3>
-              <button onClick={fetchCampaignHistory} disabled={isLoadingHistory || !campaign.wallet_address} className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg shrink-0 disabled:opacity-50">
+              <button onClick={fetchCampaignHistoryAndBalance} disabled={isLoadingHistory || !campaign.wallet_address} className="p-1.5 bg-white/20 hover:bg-white/30 rounded-lg shrink-0 disabled:opacity-50">
                 <RefreshCw size={14} className={isLoadingHistory ? 'animate-spin' : ''} />
               </button>
             </div>
@@ -486,7 +522,7 @@ export default function CampaignDetailPage() {
             </div>
           </div>
 
-          {/* KARTU PROGRESS & TARGET (BERDASARKAN TOTAL AKUMULASI) */}
+          {/* KARTU PROGRESS & TARGET (BERDASARKAN TOTAL AKUMULASI API) */}
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col min-w-0">
             <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2 shrink-0">
               <Target size={16}/> Progress Pengumpulan
@@ -523,7 +559,6 @@ export default function CampaignDetailPage() {
             <div>
               <p className="text-[10px] font-bold text-gray-400 uppercase">Nama Lengkap</p>
               <p className="text-base font-bold text-gray-800">{campaign.full_name}</p>
-              {/* Tambahkan tag Tipe Akun untuk memperjelas admin */}
               <p className="text-[10px] bg-purple-50 text-purple-600 border border-purple-100 px-2 py-0.5 rounded w-max font-bold mt-1 uppercase tracking-widest">
                 {isOrganization ? "Organisasi/Lembaga" : "Individu"}
               </p>
