@@ -9,8 +9,9 @@ import toast from "react-hot-toast";
 // 🔥 Import Firebase bawaan Anda
 import { signInWithPopup } from "firebase/auth";
 import { auth, provider } from "@/lib/firebase";
-// 🔥 IMPORT BASE_URL dari api.ts
-import { BASE_URL } from "@/lib/api";
+
+// 🔥 IMPORT AuthService
+import { AuthService } from "@/lib/auth.service";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -22,37 +23,27 @@ export default function AdminLoginPage() {
     setIsLoading(true);
 
     try {
-      // 1. Dapatkan id_token dari Firebase (SAMA SEPERTI USER)
+      // 1. Dapatkan id_token dari Firebase
       const result = await signInWithPopup(auth, provider);
       const id_token = await result.user.getIdToken();
 
-      // 2. Tembak API Admin Login
-      // 🔥 UBAH: Gunakan BASE_URL agar URL terpusat dan tidak perlu ganti IP manual
-      const response = await fetch(`${BASE_URL}/admin/auth/login`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ id_token }),
-      });
+      // 2. Tembak API Admin Login lewat AuthService
+      const data = await AuthService.loginAdmin(id_token);
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.message || "Akses ditolak. Anda bukan Administrator.");
-      }
-
-      // 3. Simpan Token persis seperti format api.ts Anda
+      // 3. Simpan Token dengan penamaan KHUSUS ADMIN
       const accessToken = data.data?.access_token || data.token || data.access_token;
       const refreshToken = data.data?.refresh_token || data.refresh_token;
 
       if (accessToken) {
-        localStorage.setItem("access_token", accessToken);
-        // Simpan juga ke Cookie agar middleware Next.js (jika ada) bisa mendeteksi login
-        document.cookie = `access_token=${accessToken}; path=/; max-age=86400;`; 
+        // 🔥 UBAH: Simpan sebagai admin_token
+        localStorage.setItem("admin_token", accessToken);
+        // Simpan juga ke Cookie dengan nama admin_token
+        document.cookie = `admin_token=${accessToken}; path=/; max-age=86400;`; 
       }
+      
       if (refreshToken) {
-        localStorage.setItem("refresh_token", refreshToken);
+        // 🔥 UBAH: Simpan sebagai admin_refresh_token
+        localStorage.setItem("admin_refresh_token", refreshToken);
       }
 
       toast.success("Otorisasi berhasil. Membuka Pusat Kendali...");
@@ -60,7 +51,9 @@ export default function AdminLoginPage() {
 
     } catch (error: any) {
       console.error("Admin Login Error:", error);
-      setMessage(error.message || "Gagal terhubung dengan layanan Google.");
+      // Hapus sesi Google jika login gagal agar bisa pilih akun lagi
+      auth.signOut(); 
+      setMessage(error.message || "Gagal terhubung atau Anda bukan Administrator.");
       toast.error("Otorisasi gagal.");
     } finally {
       setIsLoading(false);

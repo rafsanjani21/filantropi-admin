@@ -20,10 +20,11 @@ export default function CampaignDetailPage() {
   const [campaign, setCampaign] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // STATE DARI KODE USER: RIWAYAT & LIVE BALANCE
+  // STATE RIWAYAT, BALANCE (ASLI), DAN TOTAL TERKUMPUL (AKUMULASI)
   const [walletHistory, setWalletHistory] = useState<any[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [liveBalance, setLiveBalance] = useState<number | null>(null);
+  const [totalCollectedAmount, setTotalCollectedAmount] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
 
   // STATE BARU UNTUK PAGINATION RIWAYAT DONASI
@@ -68,9 +69,11 @@ export default function CampaignDetailPage() {
     
     setIsLoadingHistory(true);
     try {
-      const [historyRes, balanceRes] = await Promise.all([
+      // 🔥 UBAH: Tambahkan fetch untuk endpoint /donations/amount/:wallet
+      const [historyRes, balanceRes, amountRes] = await Promise.all([
         apiFetch(`/donations/wallets/history/${receiverWallet}`, { method: "GET" }).catch(() => null),
-        apiFetch(`/donations/wallet/balance/${receiverWallet}`, { method: "GET" }).catch(() => null)
+        apiFetch(`/donations/wallet/balance/${receiverWallet}`, { method: "GET" }).catch(() => null),
+        apiFetch(`/donations/amount/${receiverWallet}`, { method: "GET" }).catch(() => null)
       ]);
       
       if (historyRes && historyRes.data) {
@@ -89,6 +92,13 @@ export default function CampaignDetailPage() {
         setLiveBalance(parseFloat(balanceData || "0"));
       } else {
         setLiveBalance(0);
+      }
+
+      // 🔥 AMBIL DATA AKUMULASI DARI total_amount
+      if (amountRes && amountRes.data && amountRes.data.total_amount !== undefined) {
+        setTotalCollectedAmount(parseFloat(amountRes.data.total_amount));
+      } else {
+        setTotalCollectedAmount(0);
       }
 
     } catch (err) {
@@ -147,9 +157,8 @@ export default function CampaignDetailPage() {
     setIsUpdatingWallet(true);
 
     const updatePromise = apiFetch(`/admin/update/wallet/${campaign.id}`, {
-      method: "PATCH", // Atau "PUT", sesuaikan dengan Backend Anda
+      method: "PATCH", 
       body: JSON.stringify({ wallet_address: newWalletAddress.trim() }) 
-      // Catatan: Jika backend Anda murni typo 'walllet_adddress', ubah key di atas menjadi "walllet_adddress".
     });
 
     toast.promise(updatePromise, {
@@ -232,7 +241,9 @@ export default function CampaignDetailPage() {
 
   const rawTarget = campaign?.target_amount || 1;
   const target = typeof rawTarget === 'string' ? parseFloat(rawTarget.replace(/[^\d.-]/g, '')) : rawTarget;
-  const rawCollected = liveBalance !== null ? liveBalance : (campaign?.current_amount || 0);
+  
+  // 🔥 UBAH: Gunakan totalCollectedAmount yang berasal dari /donations/amount
+  const rawCollected = totalCollectedAmount !== null ? totalCollectedAmount : (campaign?.current_amount || 0);
   const collected = typeof rawCollected === 'string' ? parseFloat(rawCollected.replace(/[^\d.-]/g, '')) : rawCollected;
 
   const calculateProgress = () => {
@@ -440,7 +451,7 @@ export default function CampaignDetailPage() {
             </div>
           )}
 
-          {/* KARTU BALANCE ASLI */}
+          {/* KARTU BALANCE ASLI (TETAP MENAMPILKAN SISA SALDO) */}
           <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-6 rounded-[2rem] shadow-md text-white relative overflow-hidden">
             <div className="absolute -top-10 -right-10 w-32 h-32 bg-white opacity-10 rounded-full blur-2xl"></div>
             <div className="flex items-center justify-between mb-4 relative z-10">
@@ -475,7 +486,7 @@ export default function CampaignDetailPage() {
             </div>
           </div>
 
-          {/* KARTU PROGRESS & TARGET */}
+          {/* KARTU PROGRESS & TARGET (BERDASARKAN TOTAL AKUMULASI) */}
           <div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 flex flex-col min-w-0">
             <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-4 flex items-center gap-2 shrink-0">
               <Target size={16}/> Progress Pengumpulan

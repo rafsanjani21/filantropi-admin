@@ -1,14 +1,14 @@
-// 🔥 UBAH: Gunakan localhost agar tidak error saat IP Wi-Fi berubah, dan tambahkan 'export'
 export const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
-export async function apiFetch(endpoint: string, options: RequestInit) {
-  let access_token = localStorage.getItem("access_token") || localStorage.getItem("admin_token");
+export async function apiFetch(endpoint: string, options: RequestInit = {}) {
+  // 🔥 KHUSUS ADMIN: Fokus menggunakan admin_token
+  let admin_token = localStorage.getItem("admin_token");
 
+  // 🔥 UBAH: Sesuaikan dengan endpoint milik Admin
   const noAuthEndpoints = [
-    "/auth/login",
-    "/auth/register",
-    "/auth/refresh-token",
-    "/auth/logout",
+    "/admin/auth/login",
+    "/admin/auth/refresh-token",
+    "/admin/auth/logout",
   ];
 
   const isNoAuth = noAuthEndpoints.some((url) => endpoint.includes(url));
@@ -28,16 +28,15 @@ export async function apiFetch(endpoint: string, options: RequestInit) {
     });
   };
 
-  let res = await doFetch(access_token);
+  let res = await doFetch(admin_token);
 
   // 🔥 HANDLE TOKEN EXPIRED
   if (res.status === 401 && !isNoAuth) {
-    const refresh_token = localStorage.getItem("refresh_token") || localStorage.getItem("admin_refresh_token");
+    // 🔥 KHUSUS ADMIN: Gunakan admin_refresh_token
+    const refresh_token = localStorage.getItem("admin_refresh_token");
 
     // 🔥 FUNGSI BANTUAN UNTUK LOGOUT PAKSA + NOTIFIKASI
     const forceLogout = () => {
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("refresh_token");
       localStorage.removeItem("admin_token");
       localStorage.removeItem("admin_refresh_token");
       sessionStorage.clear();
@@ -45,7 +44,6 @@ export async function apiFetch(endpoint: string, options: RequestInit) {
       // Munculkan notifikasi ke user
       alert("Sesi Anda telah habis. Silakan login kembali untuk melanjutkan.");
 
-      // 🔥 UBAH: Karena ini project khusus Admin, langsung arahkan ke /login
       if (typeof window !== "undefined") {
         window.location.href = "/login";
       }
@@ -58,7 +56,8 @@ export async function apiFetch(endpoint: string, options: RequestInit) {
     }
 
     try {
-      const refreshRes = await fetch(`${BASE_URL}/auth/refresh-token`, {
+      // 🔥 UBAH: Pastikan menembak endpoint refresh-token ADMIN
+      const refreshRes = await fetch(`${BASE_URL}/admin/auth/refresh-token`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -71,13 +70,9 @@ export async function apiFetch(endpoint: string, options: RequestInit) {
       if (!refreshRes.ok) throw new Error();
 
       const newToken = refreshData.data.access_token;
-
-      // Cek nyimpannya harus sebagai admin_token atau access_token
-      if (localStorage.getItem("admin_token")) {
-        localStorage.setItem("admin_token", newToken);
-      } else {
-        localStorage.setItem("access_token", newToken);
-      }
+      
+      // Simpan token baru
+      localStorage.setItem("admin_token", newToken);
 
       // 🔥 retry request dengan token yang baru
       res = await doFetch(newToken);
