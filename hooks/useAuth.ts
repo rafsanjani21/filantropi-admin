@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { AuthService } from "@/lib/auth.service";
@@ -19,12 +17,10 @@ export function useAuth() {
         // ==========================================
         const res = await AuthService.login(id_token);
         
-        // Jika berhasil login, simpan token
         localStorage.setItem("access_token", res.data.access_token);
         localStorage.setItem("refresh_token", res.data.refresh_token);
         sessionStorage.removeItem("selected_role");
 
-        // Langsung arahkan ke Halaman Utama (Home)
         router.replace("/"); 
 
       } catch (err: any) {
@@ -33,35 +29,20 @@ export function useAuth() {
         // ==========================================
         if (err.message.includes("user not found") || err.message.includes("belum terdaftar")) {
           
+          // Tahan pendaftaran! Simpan id_token sementara
+          sessionStorage.setItem("id_token", id_token); 
+          sessionStorage.setItem("temp_name", name); // Simpan nama dari Google
+          
           if (fallbackRole === "penerima_manfaat") {
              // ---> PENERIMA MANFAAT BARU <---
-             // Jangan langsung didaftarkan! Simpan tokennya saja
-             sessionStorage.setItem("id_token", id_token); 
-             
-             // Arahkan ke halaman Pilih Tipe Organisasi/Individu
-             // PASTIKAN FOLDER INI ADA. Jika tidak ada, ganti path ini menjadi "/ProfilePage/PagePenerima"
              router.replace("/ProfilePage/PagePenerima/Tipe"); 
-
           } else {
              // ---> PENGGUNA UMUM BARU <---
-             // Boleh langsung didaftarkan karena tidak butuh NIK/NPWP
-             const resReg = await AuthService.register({
-               id_token,
-               name,
-               wallet_address: "", 
-               role: "user",
-             });
-             
-             localStorage.setItem("access_token", resReg.data.access_token);
-             localStorage.setItem("refresh_token", resReg.data.refresh_token);
-             sessionStorage.removeItem("selected_role");
-             
-             // Arahkan ke form profil umum agar dia bisa edit nama/wallet
+             // Arahkan ke form profil agar dia melengkapi Wallet dulu
              router.replace("/ProfilePage/UserPage");
           }
 
         } else {
-          // Jika error karena hal lain (misal koneksi server mati)
           throw err;
         }
       }
@@ -85,16 +66,13 @@ export function useAuth() {
     } finally {
       localStorage.removeItem("access_token");
       localStorage.removeItem("refresh_token");
-      sessionStorage.clear(); // Bersihkan semua memori browser
+      sessionStorage.clear(); 
       window.location.href = "/LoginPage";
     }
   };
 
-  // --- PERUBAHAN DI SINI ---
-  // Tambahkan parameter type dengan nilai default "donor"
   const getProfile = async (type: "donor" | "beneficiary" = "donor") => {
     try {
-      // Teruskan type ke AuthService
       const res = await AuthService.getProfile(type);
       return res.data;
     } catch (err: any) {
@@ -109,7 +87,6 @@ export function useAuth() {
   const updateProfile = async (formData: FormData, role: string) => {
     try {
       setLoading(true);
-      // Teruskan parameter role ke AuthService
       return await AuthService.updateProfile(formData, role);
     } finally {
       setLoading(false);

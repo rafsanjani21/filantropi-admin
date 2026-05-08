@@ -1,7 +1,8 @@
-const BASE_URL = "http://192.168.52.29:8080/api";
+// 🔥 UBAH: Gunakan localhost agar tidak error saat IP Wi-Fi berubah, dan tambahkan 'export'
+export const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
 export async function apiFetch(endpoint: string, options: RequestInit) {
-  let access_token = localStorage.getItem("access_token");
+  let access_token = localStorage.getItem("access_token") || localStorage.getItem("admin_token");
 
   const noAuthEndpoints = [
     "/auth/login",
@@ -31,11 +32,29 @@ export async function apiFetch(endpoint: string, options: RequestInit) {
 
   // 🔥 HANDLE TOKEN EXPIRED
   if (res.status === 401 && !isNoAuth) {
-    const refresh_token = localStorage.getItem("refresh_token");
+    const refresh_token = localStorage.getItem("refresh_token") || localStorage.getItem("admin_refresh_token");
 
+    // 🔥 FUNGSI BANTUAN UNTUK LOGOUT PAKSA + NOTIFIKASI
+    const forceLogout = () => {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("refresh_token");
+      localStorage.removeItem("admin_token");
+      localStorage.removeItem("admin_refresh_token");
+      sessionStorage.clear();
+
+      // Munculkan notifikasi ke user
+      alert("Sesi Anda telah habis. Silakan login kembali untuk melanjutkan.");
+
+      // 🔥 UBAH: Karena ini project khusus Admin, langsung arahkan ke /login
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    };
+
+    // Jika tidak ada refresh token sama sekali
     if (!refresh_token) {
-      window.location.href = "/LoginPage/Masuk";
-      return;
+      forceLogout();
+      return Promise.reject("Sesi habis");
     }
 
     try {
@@ -53,15 +72,20 @@ export async function apiFetch(endpoint: string, options: RequestInit) {
 
       const newToken = refreshData.data.access_token;
 
-      localStorage.setItem("access_token", newToken);
+      // Cek nyimpannya harus sebagai admin_token atau access_token
+      if (localStorage.getItem("admin_token")) {
+        localStorage.setItem("admin_token", newToken);
+      } else {
+        localStorage.setItem("access_token", newToken);
+      }
 
-      // 🔥 retry request
+      // 🔥 retry request dengan token yang baru
       res = await doFetch(newToken);
+      
     } catch {
-      localStorage.removeItem("access_token");
-      localStorage.removeItem("refresh_token");
-      window.location.href = "/LoginPage/Masuk";
-      return;
+      // 🔥 JIKA REFRESH TOKEN GAGAL/HABIS, EKSEKUSI ALERT & LOGOUT
+      forceLogout();
+      return Promise.reject("Sesi habis");
     }
   }
 
